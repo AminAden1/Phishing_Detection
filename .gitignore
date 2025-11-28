@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual env
+venv/
+env/
+
+# Playwright browser binaries
+ms-playwright/
+
+# Model files
+model.pkl
+
+# Data
+data/html/
+data/screenshots/
+technique1_results.csv
+technique2_results.csv
+
+# VS Code files
+.vscode/
