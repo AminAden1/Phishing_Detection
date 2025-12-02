@@ -1,3 +1,5 @@
+# technique1.py
+
 import os
 import pandas as pd
 import random
@@ -7,14 +9,9 @@ from sklearn.metrics import f1_score
 from playwright.sync_api import sync_playwright
 
 from common import (
-    log, save_html, safe_filename, knowphish_predict
+    log, save_html, safe_filename, knowphish_predict,
+    HTML_DIR, SCREENSHOT_DIR
 )
-
-HTML_DIR = "data/html"
-SCREENSHOT_DIR = "data/screenshots"
-
-os.makedirs(HTML_DIR, exist_ok=True)
-os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
 def random_capitalization(text, p=0.15):
@@ -53,11 +50,9 @@ def perturb_html(html):
         t = str(node)
         if not t.strip():
             continue
-
         t = random_capitalization(t)
         t = inject_stopwords(t)
         t = benign_paraphrase(t)
-
         node.replace_with(t)
 
     head = soup.find("head")
@@ -70,7 +65,7 @@ def perturb_html(html):
     return str(soup)
 
 
-def run_technique1(urls_csv="urls.csv", n_samples=20):
+def run_technique1(urls_csv="urls.csv", n_samples=200):
     df = pd.read_csv(urls_csv)
     df = df.sample(min(n_samples, len(df)), random_state=42)
 
@@ -85,33 +80,27 @@ def run_technique1(urls_csv="urls.csv", n_samples=20):
             label = 1 if row["label"] == "phish" else 0
 
             log(f"[T1] Fetching: {url}")
-
             try:
                 page.goto(url, timeout=15000, wait_until="domcontentloaded")
                 page.wait_for_timeout(4000)
                 html = page.content()
-                final_url = page.url
 
-                html_path = os.path.join(
-                    HTML_DIR, safe_filename(final_url) + ".html"
-                )
-                with open(html_path, "w", encoding="utf-8") as f:
-                    f.write(html)
+                # ALWAYS SAVE USING ORIGINAL URL HASH
+                html_path = save_html(url, html, suffix="")
 
+                # Screenshot
                 screenshot_path = os.path.join(
-                    SCREENSHOT_DIR, safe_filename(final_url) + "_t1.png"
+                    SCREENSHOT_DIR, safe_filename(url) + "_t1.png"
                 )
                 page.screenshot(path=screenshot_path, full_page=True)
 
+                # Baseline prediction
                 p_base = knowphish_predict(html_path, screenshot_path)
                 y_base = 1 if p_base >= 0.5 else 0
 
+                # Perturbed HTML
                 perturbed_html = perturb_html(html)
-                pert_path = os.path.join(
-                    HTML_DIR, safe_filename(final_url) + "_pert.html"
-                )
-                with open(pert_path, "w", encoding="utf-8") as f:
-                    f.write(perturbed_html)
+                pert_path = save_html(url, perturbed_html, suffix="pert")
 
                 p_pert = knowphish_predict(pert_path, screenshot_path)
                 y_pert = 1 if p_pert >= 0.5 else 0
@@ -134,7 +123,6 @@ def run_technique1(urls_csv="urls.csv", n_samples=20):
     results_df = pd.DataFrame(results)
     results_df.to_csv("technique1_results.csv", index=False)
     log("Saved technique1_results.csv")
-
     evaluate_technique1(results_df)
 
 
@@ -153,7 +141,7 @@ def evaluate_technique1(df: pd.DataFrame):
 
     plt.bar(["Base", "Perturbed"],
             [f1_score(y, base), f1_score(y, pert)])
-    plt.title("F1 Score Drop After Perturbation")
+    plt.title("F1 Score Before/After Perturbation")
     plt.savefig("t1_f1_drop.png")
     plt.close()
     print("Saved visualization t1_f1_drop.png")

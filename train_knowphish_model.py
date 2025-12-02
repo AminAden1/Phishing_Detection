@@ -1,70 +1,74 @@
 # train_knowphish_model.py
 
 import os
-import re
 import pickle
-import hashlib
 import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, f1_score
 
-from common import HTML_DIR, SCREENSHOT_DIR, log, url_hash
+from common import HTML_DIR, safe_filename, log, _clean_html_text
+
+MIN_TEXT_LEN = 80  # must have some content
 
 
-def extract_features(html_text: str):
-    if html_text is None:
-        return [0, 0]
-    text_len = len(html_text)
-    num_tags = html_text.count("<")
-    return [text_len, num_tags]
+print("[+] [+] Loading URL labels...")
+df = pd.read_csv("urls.csv")
 
+texts = []
+labels = []
 
-def train_model(urls_csv="urls.csv"):
-    df = pd.read_csv(urls_csv)
+print("[+] [+] Collecting HTML/text for each URL...")
 
-    X = []
-    y = []
+for _, row in df.iterrows():
+    url = row["url"]
+    label = 1 if row["label"] == "phish" else 0
 
-    log("[+] Loading training data...")
+    base = safe_filename(url)
 
-    for _, row in df.iterrows():
-        url = row["url"]
-        label = 1 if row["label"] == "phish" else 0
+    candidate_files = [
+        os.path.join(HTML_DIR, f"{base}.html"),
+        os.path.join(HTML_DIR, f"{base}_pert.html"),
+        os.path.join(HTML_DIR, f"{base}_t2.html"),
+    ]
 
-        h = url_hash(url)
-
-        html_path = os.path.join(HTML_DIR, h + ".html")
-        if not os.path.exists(html_path):
+    for path in candidate_files:
+        if not os.path.exists(path):
             continue
 
         try:
-            with open(html_path, "r", encoding="utf-8") as f:
-                html = f.read()
+            raw = open(path, "r", encoding="utf-8", errors="ignore").read()
         except:
             continue
 
-        feats = extract_features(html)
-        X.append(feats)
-        y.append(label)
+        text = _clean_html_text(raw)
+        if not text or len(text) < MIN_TEXT_LEN:
+            continue
 
-    if len(X) == 0:
-        print("[-] No matching HTML/screenshots found!")
-        return
+        texts.append(text)
+        labels.append(label)
 
-    log("[+] Training RandomForest classifier...")
-    model = RandomForestClassifier(n_estimators=150)
-    model.fit(X, y)
+print(f"[+] Total usable HTML pages: {len(texts)}")
 
-    preds = model.predict(X)
-    print("\n=== MODEL PERFORMANCE ===")
-    print("Accuracy:", accuracy_score(y, preds))
-    print("F1 Score:", f1_score(y, preds))
+if len(texts) < 20:
+    print("[-] Not enough training data. Run technique1/2 on more URLs.")
+    raise SystemExit
 
-    with open("model.pkl", "wb") as f:
-        pickle.dump(model, f)
+print("[+] [+] Vectorizing text...")
+vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
+X = vectorizer.fit_transform(texts)
 
-    log("[+] Saved model.pkl")
+print("[+] [+] Training RandomForest classifier...")
+clf = RandomForestClassifier(n_estimators=250, random_state=42)
+clf.fit(X, labels)
 
+pred = clf.predict(X)
 
-if __name__ == "__main__":
-    train_model()
+print("\n=== MODEL PERFORMANCE (on training set) ===")
+print("Accuracy:", accuracy_score(labels, pred))
+print("F1 Score:", f1_score(labels, pred))
+
+with open("model.pkl", "wb") as f:
+    pickle.dump({"model": clf, "vectorizer": vectorizer}, f)
+
+print("[+] [+] Saved model.pkl")
